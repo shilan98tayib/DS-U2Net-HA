@@ -43,8 +43,8 @@ ________________________________________
 - Modify the dataset paths inside config.py :
   - noisy_dirs_for_train = "../Dataset/train/NOISY/"
   - clean_dirs_for_train = "../Dataset/train/ CLEAN/"
-  - noisy_dirs_for_valid = "../Dataset/valid/noisy/"
-  - clean_dirs_for_valid = "../Dataset/valid/ NOISY/"
+  - noisy_dirs_for_valid = "../Dataset/valid/NOISY/"
+  - clean_dirs_for_valid = "../Dataset/valid/CLEAN/"
 - FS = 16000
 - WIN_LEN = 400
 - HOP_LEN = 100
