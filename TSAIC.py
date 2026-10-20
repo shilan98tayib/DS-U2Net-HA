@@ -93,54 +93,96 @@ class ChannelAttentionSegment(nn.Module):
         out: (B, C, T, F)
     """
 
-    def __init__(self, in_channels: int, reduction: int = 16):
+    def __init__(self, in_channels: int, shuffle_groups: int = 2):
         super().__init__()
+        if shuffle_groups < 1:
+            raise ValueError("shuffle_groups must be >= 1")
 
-        reduced_channels = max(1, in_channels // reduction)
+        if in_channels % shuffle_groups != 0:
+            raise ValueError(
+                "in_channels must be divisible by shuffle_groups"
+            )
 
+        self.shuffle_groups = shuffle_groups
+
+        # Sequential 2D convolutions
         self.conv1 = nn.Conv2d(
             in_channels,
             in_channels,
             kernel_size=(3, 1),
-            padding=(1, 0),
-            groups=in_channels
+            padding=(1, 0)
         )
 
         self.conv2 = nn.Conv2d(
             in_channels,
             in_channels,
             kernel_size=(1, 3),
-            padding=(0, 1),
-            groups=in_channels
+            padding=(0, 1)
         )
 
+        # Channel attention
         self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
 
-        self.attention = nn.Sequential(
-            nn.Conv1d(in_channels, reduced_channels, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv1d(reduced_channels, in_channels, kernel_size=1),
-            nn.Sigmoid()
+        self.attention = nn.Conv1d(
+            in_channels=1,
+            out_channels=1,
+            kernel_size=3,
+            padding=1,
+            bias=False
         )
+
+        self.sigmoid = nn.Sigmoid()
+
+        # Output projection
 
         self.conv_out = nn.Conv2d(in_channels, in_channels, kernel_size=1)
 
+    def channel_shuffle(self, x):
+        B, C, T, F = x.shape
+        groups = self.shuffle_groups
+
+        x = x.reshape(
+            B, groups, C // groups, T, F
+        )
+
+        x = x.transpose(1, 2).contiguous()
+
+        x = x.reshape(B, C, T, F)
+
+        return x
+
     def forward(self, x):
-        out = self.conv1(x) + self.conv2(x)
+        # 1. Sequential convolutions
+        out = self.conv1(x)
+        out = self.conv2(out)
 
-        # Global channel descriptor: (B, C, 1)
-        gap = self.global_avg_pool(out).squeeze(-1).squeeze(-1).unsqueeze(-1)
+        # 2. Global average pooling
+        gap = self.global_avg_pool(out)
 
-        # Channel attention weights: (B, C, 1, 1)
-        ca = self.attention(gap).unsqueeze(-1)
+        # (B, C, 1, 1) -> (B, 1, C)
+        gap = gap.squeeze(-1).transpose(1, 2)
 
+        # 3. Channel attention: Conv1D(3) + Sigmoid
+        ca = self.attention(gap)
+        ca = self.sigmoid(ca)
+
+        # (B, 1, C) -> (B, C, 1, 1)
+        ca = ca.transpose(1, 2).unsqueeze(-1)
+
+        # 4. Channel recalibration
         out = out * ca
+
+        # 5. Pointwise convolution
         out = self.conv_out(out)
 
-        # Residual connection
+        # 6. Residual connection
         out = out + x
-
+        
+        # 7. Channel shuffling
+        out = self.channel_shuffle(out)
         return out
+
+
 
 
 class TSAIC(nn.Module):
@@ -179,8 +221,7 @@ class TSAIC(nn.Module):
         )
 
         self.channel_attention = ChannelAttentionSegment(
-            in_channels=in_channels,
-            reduction=reduction
+            in_channels=in_channels
         )
 
     def forward(self, x):
